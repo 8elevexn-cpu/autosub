@@ -73,6 +73,7 @@ public class AutoSubTaskService extends Service {
     private static final String KEY_BATCH_FORMAT = "batch_format";
     private static final String KEY_SUBTITLE_MAX_WORDS = "subtitle_max_words_per_subtitle";
     private static final String KEY_KEEP_SENTENCES_TOGETHER = "keep_sentences_together";
+    private static final String KEY_CONVERT_TRADITIONAL = "convert_traditional";
     private static final String KEY_SUPPRESS_WHISPER_SDH = "suppress_whisper_sdh";
     private static final String KEY_WHISPER_VAD_ENABLED = "whisper_vad_enabled";
     private static final String KEY_WHISPER_VAD_MODEL = "whisper_vad_model";
@@ -227,7 +228,7 @@ public class AutoSubTaskService extends Service {
         if (info == null) {
             modelReady = false;
             modelLoading = false;
-            generalStatusText = "No speech models are available";
+            generalStatusText = "No speech model installed - open Models to download one";
             publishModelState();
             publishIdleStateIfNoWork();
             return;
@@ -1251,6 +1252,7 @@ public class AutoSubTaskService extends Service {
                 KEY_SUBTITLE_MAX_WORDS, SubtitleGenerator.DEFAULT_MAX_WORDS_PER_SUBTITLE));
         subtitleGenerator.setKeepSentencesTogether(settingsPrefs.getBoolean(
                 KEY_KEEP_SENTENCES_TOGETHER, SubtitleGenerator.DEFAULT_KEEP_SENTENCES_TOGETHER));
+        subtitleGenerator.setConvertToTraditional(settingsPrefs.getBoolean(KEY_CONVERT_TRADITIONAL, false));
         subtitleGenerator.setSuppressWhisperSdh(settingsPrefs.getBoolean(KEY_SUPPRESS_WHISPER_SDH, true));
         subtitleGenerator.setWhisperVadEnabled(
                 settingsPrefs.getBoolean(KEY_WHISPER_VAD_ENABLED, false) || queueItem.isUseVad());
@@ -1586,11 +1588,8 @@ public class AutoSubTaskService extends Service {
     }
 
     private boolean shouldDeferHeavyModelLoad(VoskModelInfo modelInfo, boolean allowHeavyModelLoad) {
-        return !allowHeavyModelLoad
-                && modelInfo != null
-                && !modelInfo.isBundled()
-                && modelManager.getModelLoadMode(modelInfo) == VoskModelManager.ModelLoadMode.FULL_QUALITY
-                && (modelInfo.isVeryLarge() || !modelInfo.isMobileRecommended());
+        // The model the person picked is always kept and loaded again on the next launch.
+        return false;
     }
 
     private void updateSelectedModelViews(VoskModelInfo info) {
