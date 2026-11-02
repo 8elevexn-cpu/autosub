@@ -1786,6 +1786,205 @@ public class SubtitleGenerator {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Chinese / Japanese / Korean: one word per character, using Whisper's own token timing.
+    // Whisper gives no spaces for these languages, so the normal splitter would keep a whole phrase
+    // as a single word. If the tokens cannot be matched to the text, the old behaviour is used.
+    // ---------------------------------------------------------------------------------------
+
+    private boolean containsCjkLetter(String text) {
+        if (text == null) {
+            return false;
+        }
+        for (int i = 0; i < text.length(); ) {
+            int codePoint = text.codePointAt(i);
+            if (isCjkLetter(codePoint)) {
+                return true;
+            }
+            i += Character.charCount(codePoint);
+        }
+        return false;
+    }
+
+    private boolean isCjkLetter(int codePoint) {
+        Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+        return script == Character.UnicodeScript.HAN || script == Character.UnicodeScript.HIRAGANA
+                || script == Character.UnicodeScript.KATAKANA || script == Character.UnicodeScript.HANGUL
+                || script == Character.UnicodeScript.BOPOMOFO;
+    }
+
+    private List<WordTiming> buildCjkWordsFromTokens(String tokenTimingsJson, long tokenOffsetMs,
+                                                     TimeMapper timeMapper, String displayText) {
+        try {
+            JSONArray tokens = new JSONArray(tokenTimingsJson);
+            List<String> slotText = new ArrayList<>();
+            List<long[]> slotTime = new ArrayList<>();
+            List<Double> slotConfidence = new ArrayList<>();
+            boolean previousBroken = false;
+            for (int i = 0; i < tokens.length(); i++) {
+                JSONObject token = tokens.getJSONObject(i);
+                String tokenText = token.optString("text", "");
+                long startMs = token.optLong("startMs", -1);
+                long endMs = token.optLong("endMs", -1);
+                if (timeMapper != null && startMs >= 0) {
+                    startMs = timeMapper.mapCompactMsToOriginalMs(startMs, false);
+                } else if (startMs >= 0) {
+                    startMs += tokenOffsetMs;
+                }
+                if (timeMapper != null && endMs >= 0) {
+                    endMs = timeMapper.mapCompactMsToOriginalMs(endMs, true);
+                } else if (endMs >= 0) {
+                    endMs += tokenOffsetMs;
+                }
+                if (tokenText.isEmpty() || startMs < 0 || endMs <= startMs) {
+                    continue;
+                }
+                double confidence = token.optDouble("confidence", 0.0);
+                if (tokenText.indexOf('\uFFFD') >= 0) {
+                    // Part of a character that was split over several tokens.
+                    if (previousBroken) {
+                        long[] last = slotTime.get(slotTime.size() - 1);
+                        last[1] = Math.max(last[1], endMs);
+                    } else {
+                        slotText.add(null);
+                        slotTime.add(new long[]{startMs, endMs});
+                        slotConfidence.add(confidence);
+                    }
+                    previousBroken = true;
+                } else {
+                    if (tokenText.trim().isEmpty()) {
+                        continue;
+                    }
+                    slotText.add(tokenText);
+                    slotTime.add(new long[]{startMs, endMs});
+                    slotConfidence.add(confidence);
+                    previousBroken = false;
+                }
+            }
+            return alignCjkTokenSlots(slotText, slotTime, slotConfidence, displayText);
+        } catch (Exception e) {
+            DebugLog.e(TAG, "Error reading Whisper token timings for CJK text", e);
+            return null;
+        }
+    }
+
+    /** Returns null when the tokens do not line up with the text. */
+    private List<WordTiming> alignCjkTokenSlots(List<String> slotText, List<long[]> slotTime,
+                                                List<Double> slotConfidence, String target) {
+        if (target == null || slotText.isEmpty()) {
+            return null;
+        }
+        List<WordTiming> words = new ArrayList<>();
+        int length = target.length();
+        int pos = 0;
+        for (int i = 0; i < slotText.size(); i++) {
+            boolean spaceBefore = false;
+            while (pos < length && Character.isWhitespace(target.charAt(pos))) {
+                pos++;
+                spaceBefore = true;
+            }
+            String raw = slotText.get(i);
+            if (raw != null && !raw.isEmpty() && Character.isWhitespace(raw.charAt(0))) {
+                spaceBefore = true;
+            }
+            String text;
+            if (raw == null) {
+                String nextValid = null;
+                for (int j = i + 1; j < slotText.size(); j++) {
+                    if (slotText.get(j) != null) {
+                        nextValid = slotText.get(j).trim();
+                        break;
+                    }
+                }
+                int end = pos;
+                int taken = 0;
+                while (end < length && taken < 3) {
+                    end += Character.charCount(target.codePointAt(end));
+                    taken++;
+                    boolean matched = nextValid == null
+                            ? onlyPunctuationOrSpaceFrom(target, end)
+                            : startsWithSkippingSpace(target, end, nextValid);
+                    if (matched) {
+                        break;
+                    }
+                }
+                if (taken == 0) {
+                    return null;
+                }
+                text = target.substring(pos, end);
+                pos = end;
+            } else {
+                String trimmed = raw.trim();
+                if (trimmed.isEmpty() || !target.startsWith(trimmed, pos)) {
+                    return null;
+                }
+                text = trimmed;
+                pos += trimmed.length();
+            }
+
+            long startMs = slotTime.get(i)[0];
+            long endMs = slotTime.get(i)[1];
+            boolean attach = false;
+            if (!words.isEmpty()) {
+                String previousText = words.get(words.size() - 1).getWord();
+                if (isPunctuationOnly(text)) {
+                    attach = true;
+                } else if (!spaceBefore
+                        && !isCjkLetter(text.codePointAt(0))
+                        && !isCjkLetter(previousText.codePointBefore(previousText.length()))) {
+                    attach = true;
+                }
+            }
+            if (attach) {
+                WordTiming previous = words.remove(words.size() - 1);
+                words.add(new WordTiming(previous.getWord() + text, previous.getStartMs(),
+                        Math.max(previous.getEndMs(), endMs), previous.getConfidence()));
+            } else {
+                words.add(new WordTiming(text, startMs, endMs, slotConfidence.get(i)));
+            }
+        }
+        if (!onlyPunctuationOrSpaceFrom(target, pos)) {
+            return null;
+        }
+        if (pos < length && !words.isEmpty()) {
+            String tail = target.substring(pos).trim();
+            if (!tail.isEmpty()) {
+                WordTiming previous = words.remove(words.size() - 1);
+                words.add(new WordTiming(previous.getWord() + tail, previous.getStartMs(),
+                        previous.getEndMs(), previous.getConfidence()));
+            }
+        }
+        return words.isEmpty() ? null : words;
+    }
+
+    private boolean onlyPunctuationOrSpaceFrom(String target, int from) {
+        for (int i = from; i < target.length(); ) {
+            int codePoint = target.codePointAt(i);
+            if (Character.isLetterOrDigit(codePoint)) {
+                return false;
+            }
+            i += Character.charCount(codePoint);
+        }
+        return true;
+    }
+
+    private boolean startsWithSkippingSpace(String target, int from, String prefix) {
+        int p = from;
+        while (p < target.length() && Character.isWhitespace(target.charAt(p))) {
+            p++;
+        }
+        return !prefix.isEmpty() && target.startsWith(prefix, p);
+    }
+
+    /** A single CJK character counts as half a word, so a line holds about twice as many of them. */
+    private double subtitleWordWeight(String wordText) {
+        if (wordText == null || wordText.isEmpty()) {
+            return 1.0;
+        }
+        int first = wordText.codePointAt(0);
+        return isCjkLetter(first) && wordText.length() <= 2 ? 0.5 : 1.0;
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Simplified -> Traditional Chinese conversion (uses the ICU transliterator built into Android).
     // ---------------------------------------------------------------------------------------
 
@@ -3066,6 +3265,14 @@ public class SubtitleGenerator {
             return words;
         }
 
+        if (containsCjkLetter(fallbackText)) {
+            List<WordTiming> cjkWords = buildCjkWordsFromTokens(tokenTimingsJson, tokenOffsetMs,
+                    timeMapper, fallbackText);
+            if (cjkWords != null && !cjkWords.isEmpty()) {
+                return cjkWords;
+            }
+        }
+
         try {
             JSONArray tokens = new JSONArray(tokenTimingsJson);
             StringBuilder currentWord = new StringBuilder();
@@ -3262,6 +3469,7 @@ public class SubtitleGenerator {
                 Math.min(MAX_WORDS_PER_SUBTITLE_LIMIT, wordsPerSubtitle));
         List<WordTiming> currentWords = new ArrayList<>();
         StringBuilder currentText = new StringBuilder();
+        double currentWeight = 0;
 
         for (WordTiming word : words) {
             String wordText = word.getWord();
@@ -3275,18 +3483,21 @@ public class SubtitleGenerator {
             boolean sentenceBoundary = keepSentencesTogether
                     && currentText.length() > 0
                     && endsSentence(currentText.toString());
-            boolean wordCountBoundary = currentWords.size() >= boundedWordsPerSubtitle;
+            boolean wordCountBoundary = currentWeight >= boundedWordsPerSubtitle;
             if (!currentWords.isEmpty() && (timeGapBoundary || wordCountBoundary || sentenceBoundary)) {
                 addSubtitleChunk(subtitles, currentWords, currentText.toString());
                 currentWords = new ArrayList<>();
                 currentText = new StringBuilder();
+                currentWeight = 0;
             }
 
-            if (currentText.length() > 0) {
+            if (!currentWords.isEmpty()
+                    && karaokeNeedsSpace(currentWords.get(currentWords.size() - 1).getWord(), wordText)) {
                 currentText.append(" ");
             }
             currentText.append(wordText);
             currentWords.add(word);
+            currentWeight += subtitleWordWeight(wordText);
         }
 
         if (!currentWords.isEmpty()) {
@@ -3296,7 +3507,8 @@ public class SubtitleGenerator {
 
     private boolean endsSentence(String text) {
         String trimmed = text == null ? "" : text.trim();
-        return trimmed.endsWith(".") || trimmed.endsWith("!") || trimmed.endsWith("?");
+        return trimmed.endsWith(".") || trimmed.endsWith("!") || trimmed.endsWith("?")
+                || trimmed.endsWith("\u3002") || trimmed.endsWith("\uff01") || trimmed.endsWith("\uff1f");
     }
 
     private boolean isWhisperSdhCaption(String text) {
