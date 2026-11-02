@@ -213,10 +213,87 @@ public class SettingsFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
+        setupOptionHelp();
         viewModel = new ViewModelProvider(requireActivity()).get(MainViewModel.class);
 
         setupActions();
         observeViewModel();
+    }
+
+    // Tap an option to show or hide a short explanation under it.
+    private void setupOptionHelp() {
+        attachHelp(binding.subtitleWordsValueTV,
+                "每一句字幕最多放幾個字（最少 3、最多 25）。中文是以辨識出的詞為單位，不一定剛好是一個字。數字越小，一行字幕越短。");
+        attachHelp(binding.keepSentencesTogetherSwitch,
+                "遇到句號、驚嘆號、問號就換成下一句字幕，避免一句話被切成兩段。");
+        attachHelp(binding.convertTraditionalSwitch,
+                "辨識完成後，把簡體中文自動轉成繁體中文。只對新產生的字幕有效，已經完成的要重新產生。");
+        attachHelp(binding.suppressWhisperSdhSwitch,
+                "移除 Whisper 自己加上的環境音說明，例如 [音樂]、(掌聲) 這類字幕。");
+        attachHelp(binding.whisperVadSwitch,
+                "先偵測哪裡有人聲，跳過安靜的部分再辨識。可以加快速度、減少亂跳的字幕，但很小聲的內容可能被漏掉。");
+        attachHelp(binding.whisperVadModelLabelTV,
+                "選擇偵測人聲用的方法。");
+        attachHelp(binding.whisperVadAggressivenessLabelTV,
+                "數值越高，越容易把背景聲音當成安靜而略過；調太高可能會漏字。");
+        attachHelp(binding.translateSubtitlesSwitch,
+                "辨識完成後，把字幕翻譯成其他語言。下面可以選來源語言和目標語言。");
+        attachHelp(binding.translationSourceLabelTV,
+                "原本字幕的語言。選自動的話會自己判斷。");
+        attachHelp(binding.translationTargetLabelTV,
+                "想翻譯成的語言。");
+        attachHelp(binding.shortsUppercaseSwitch,
+                "逐字顯示時，目前唸到的字用大寫顯示（主要對英文有效）。");
+        attachHelp(binding.shortsWordByWordSwitch,
+                "直式影片和音訊檔一次只顯示一個字，適合短影片風格。想要整句顯示再逐字變色的 KTV 效果，請關閉這個選項，並匯出 ASS 或 LRC。");
+        attachHelp(binding.skipShortsDialogSwitch,
+                "加入直式影片時不再跳出 Shorts 選項視窗，直接使用目前的設定。");
+        attachHelp(binding.shortsSmoothAutoFramingSwitch,
+                "自動取景時讓畫面平滑移動，避免鏡頭忽然跳動。");
+        attachHelp(binding.completionNotificationsSwitch,
+                "字幕產生或匯出完成時顯示通知。");
+        attachHelp(binding.showRamUsageSwitch,
+                "在產生字幕的畫面顯示目前使用的記憶體，可以判斷選的模型會不會太大。");
+    }
+
+    private void attachHelp(View option, String help) {
+        if (option == null) {
+            return;
+        }
+        View anchor = option;
+        for (int level = 0; level < 3; level++) {
+            ViewGroup parent = anchor.getParent() instanceof ViewGroup ? (ViewGroup) anchor.getParent() : null;
+            if (parent instanceof android.widget.LinearLayout
+                    && ((android.widget.LinearLayout) parent).getOrientation() == android.widget.LinearLayout.VERTICAL) {
+                break;
+            }
+            if (parent == null || !(parent.getParent() instanceof ViewGroup)) {
+                break;
+            }
+            anchor = parent;
+        }
+        ViewGroup container = anchor.getParent() instanceof ViewGroup ? (ViewGroup) anchor.getParent() : null;
+        android.widget.TextView helpView = null;
+        if (container instanceof android.widget.LinearLayout
+                && ((android.widget.LinearLayout) container).getOrientation() == android.widget.LinearLayout.VERTICAL) {
+            helpView = new android.widget.TextView(requireContext());
+            helpView.setText(help);
+            helpView.setTextSize(13f);
+            helpView.setTextColor(com.google.android.material.color.MaterialColors.getColor(
+                    option, com.google.android.material.R.attr.colorOnSurfaceVariant));
+            float density = getResources().getDisplayMetrics().density;
+            helpView.setPadding((int) (4 * density), (int) (2 * density), (int) (4 * density), (int) (8 * density));
+            helpView.setVisibility(View.GONE);
+            container.addView(helpView, container.indexOfChild(anchor) + 1);
+        }
+        final android.widget.TextView finalHelpView = helpView;
+        option.setOnClickListener(v -> {
+            if (finalHelpView != null) {
+                finalHelpView.setVisibility(finalHelpView.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+            } else {
+                android.widget.Toast.makeText(requireContext(), help, android.widget.Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     private void setupActions() {
@@ -329,6 +406,10 @@ public class SettingsFragment extends Fragment {
 
         binding.keepSentencesTogetherSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
             viewModel.setKeepSentencesTogether(isChecked);
+        });
+
+        binding.convertTraditionalSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            viewModel.setConvertTraditional(isChecked);
         });
 
         binding.suppressWhisperSdhSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
@@ -464,6 +545,10 @@ public class SettingsFragment extends Fragment {
         viewModel.getSubtitleMaxWords().observe(getViewLifecycleOwner(), maxWords -> {
             binding.subtitleWordsSlider.setValue(maxWords);
             binding.subtitleWordsValueTV.setText(maxWords + " words");
+        });
+
+        viewModel.getConvertTraditional().observe(getViewLifecycleOwner(), enabled -> {
+            binding.convertTraditionalSwitch.setChecked(Boolean.TRUE.equals(enabled));
         });
 
         viewModel.getKeepSentencesTogether().observe(getViewLifecycleOwner(), keepTogether -> {
