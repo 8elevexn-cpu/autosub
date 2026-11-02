@@ -14,21 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 兩個大檔案(ffmpeg 函式庫、語音模型)因為太大無法透過網頁上傳,
-      # 這裡從原作者的 repo 取回來放到原本的位置。
-      - name: Fetch large files from original repo
+      # ffmpeg 函式庫太大無法透過網頁上傳,這裡從原作者的 repo 取回來放到原本的位置。
+      - name: Fetch ffmpeg library from original repo
         run: |
           set -e
-          NEED=0
-          [ -f app/libs/ffmpeg-kit.aar ] || NEED=1
-          [ -f app/src/main/assets/models/ggml-base.en-q5_1.bin ] || NEED=1
-          if [ "$NEED" = "1" ]; then
+          if [ ! -f app/libs/ffmpeg-kit.aar ]; then
             git clone --depth 1 https://github.com/Serkali-sudo/auto-subtitle-generator.git /tmp/orig
-            mkdir -p app/libs app/src/main/assets/models
-            [ -f app/libs/ffmpeg-kit.aar ] || cp /tmp/orig/app/libs/ffmpeg-kit.aar app/libs/
-            [ -f app/src/main/assets/models/ggml-base.en-q5_1.bin ] || cp /tmp/orig/app/src/main/assets/models/ggml-base.en-q5_1.bin app/src/main/assets/models/
+            mkdir -p app/libs
+            cp /tmp/orig/app/libs/ffmpeg-kit.aar app/libs/
           fi
-          ls -la app/libs app/src/main/assets/models
+          ls -la app/libs
 
       - uses: actions/setup-java@v5
         with:
