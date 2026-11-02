@@ -163,6 +163,14 @@ public class SubtitleGenerator {
         this.keepSentencesTogether = keepSentencesTogether;
     }
 
+    private volatile boolean convertToTraditional = false;
+    private android.icu.text.Transliterator traditionalTransliterator;
+    private boolean traditionalTransliteratorFailed = false;
+
+    public void setConvertToTraditional(boolean enabled) {
+        this.convertToTraditional = enabled;
+    }
+
     public void setSuppressWhisperSdh(boolean suppressWhisperSdh) {
         this.suppressWhisperSdh = suppressWhisperSdh;
     }
@@ -463,6 +471,7 @@ public class SubtitleGenerator {
                 List<SubtitleEntry> subtitleEntries = processAudioFile(audioFile, callback);
 
                 normalizeSubtitleTimings(subtitleEntries);
+                convertSubtitlesToTraditionalIfNeeded(subtitleEntries);
 
                 if (isCancelled) {
                     callback.onCancelled();
@@ -839,6 +848,10 @@ public class SubtitleGenerator {
                     writeSrtSubtitles(exportEntries, fos);
                 } else if (format.equalsIgnoreCase("vtt")) {
                     writeVttSubtitles(exportEntries, fos);
+                } else if (format.equalsIgnoreCase("ass")) {
+                    writeKaraokeAssSubtitles(exportEntries, fos, resolveAssFontName(null));
+                } else if (format.equalsIgnoreCase("lrc")) {
+                    writeLrcSubtitles(exportEntries, fos);
                 } else {
                     throw new IllegalArgumentException("Unsupported subtitle format: " + format);
                 }
@@ -1770,6 +1783,287 @@ public class SubtitleGenerator {
                 .replace("{", "\\{")
                 .replace("}", "\\}")
                 .replace("\n", "\\N");
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Simplified -> Traditional Chinese conversion (uses the ICU transliterator built into Android).
+    // ---------------------------------------------------------------------------------------
+
+    private synchronized android.icu.text.Transliterator getTraditionalTransliterator() {
+        if (traditionalTransliterator == null && !traditionalTransliteratorFailed) {
+            try {
+                traditionalTransliterator = android.icu.text.Transliterator.getInstance("Hans-Hant");
+            } catch (Throwable t) {
+                traditionalTransliteratorFailed = true;
+                DebugLog.e(TAG, "Simplified to Traditional conversion is not available", t);
+            }
+        }
+        return traditionalTransliterator;
+    }
+
+    private void convertSubtitlesToTraditionalIfNeeded(List<SubtitleEntry> entries) {
+        if (!convertToTraditional || entries == null) {
+            return;
+        }
+        android.icu.text.Transliterator transliterator = getTraditionalTransliterator();
+        if (transliterator == null) {
+            return;
+        }
+        for (SubtitleEntry entry : entries) {
+            List<WordTiming> words = entry.getWords();
+            if (words != null && !words.isEmpty()) {
+                entry.setWords(convertWordsToTraditional(transliterator, words));
+            }
+            String text = entry.getText();
+            if (text != null && !text.isEmpty()) {
+                entry.setText(transliterator.transliterate(text));
+            }
+        }
+    }
+
+    private List<WordTiming> convertWordsToTraditional(android.icu.text.Transliterator transliterator,
+                                                       List<WordTiming> words) {
+        StringBuilder joined = new StringBuilder();
+        for (WordTiming word : words) {
+            joined.append(word.getWord() == null ? "" : word.getWord());
+        }
+        // Convert the whole line so context sensitive characters come out right, then cut it back up.
+        String converted = transliterator.transliterate(joined.toString());
+        boolean sameLength = converted.length() == joined.length();
+        List<WordTiming> result = new ArrayList<>(words.size());
+        int position = 0;
+        for (WordTiming word : words) {
+            String raw = word.getWord() == null ? "" : word.getWord();
+            String convertedWord = sameLength
+                    ? converted.substring(position, position + raw.length())
+                    : transliterator.transliterate(raw);
+            position += raw.length();
+            result.add(new WordTiming(convertedWord, word.getStartMs(), word.getEndMs(), word.getConfidence()));
+        }
+        return result;
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Enhanced LRC lyrics with a time tag in front of every word.
+    // ---------------------------------------------------------------------------------------
+
+    private void writeLrcSubtitles(List<SubtitleEntry> subtitles, FileOutputStream fos) throws IOException {
+        Writer writer = new OutputStreamWriter(fos, StandardCharsets.UTF_8);
+        writer.write("[re:AutoSub]\n");
+        for (SubtitleEntry entry : subtitles) {
+            List<WordTiming> words = cleanKaraokeWords(entry.getWords());
+            if (words.isEmpty()) {
+                String plain = entry.getText() == null ? "" : entry.getText().replace('\n', ' ').trim();
+                if (!plain.isEmpty()) {
+                    writer.write("[" + formatLrcTime(parseSubtitleTime(entry.getStartTime())) + "]" + plain + "\n");
+                }
+                continue;
+            }
+            StringBuilder line = new StringBuilder();
+            line.append('[').append(formatLrcTime(words.get(0).getStartMs())).append(']');
+            for (int w = 0; w < words.size(); w++) {
+                WordTiming cur = words.get(w);
+                line.append('<').append(formatLrcTime(cur.getStartMs())).append('>')
+                        .append(cur.getWord().replace('\n', ' '));
+                if (w + 1 < words.size() && karaokeNeedsSpace(cur.getWord(), words.get(w + 1).getWord())) {
+                    line.append(' ');
+                }
+            }
+            line.append('<').append(formatLrcTime(words.get(words.size() - 1).getEndMs())).append('>');
+            writer.write(line.toString() + "\n");
+        }
+        writer.flush();
+    }
+
+    private String formatLrcTime(long timeMs) {
+        long totalCs = Math.round(timeMs / 10.0);
+        long minutes = totalCs / 6000;
+        long seconds = (totalCs % 6000) / 100;
+        long centis = totalCs % 100;
+        return String.format(Locale.US, "%02d:%02d.%02d", minutes, seconds, centis);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // KTV / karaoke style subtitles: the whole line is shown and each word is filled in as it is sung.
+    // ---------------------------------------------------------------------------------------
+
+    private void writeKaraokeAssSubtitles(List<SubtitleEntry> subtitles, FileOutputStream fos,
+                                          String fontName) throws IOException {
+        Writer writer = new OutputStreamWriter(fos, StandardCharsets.UTF_8);
+        writer.write("[Script Info]\n");
+        writer.write("ScriptType: v4.00+\n");
+        writer.write("WrapStyle: 0\n");
+        writer.write("ScaledBorderAndShadow: yes\n");
+        writer.write("PlayResX: 1920\n");
+        writer.write("PlayResY: 1080\n\n");
+        writer.write("[V4+ Styles]\n");
+        writer.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
+        // PrimaryColour = already sung (yellow), SecondaryColour = not yet sung (white). Colours are &HAABBGGRR.
+        writer.write(String.format(Locale.US,
+                "Style: Karaoke,%s,72,&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,0,2,80,80,110,1\n\n",
+                fontName));
+        writer.write("[Events]\n");
+        writer.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+
+        long prevDisplayEnd = 0;
+        for (int i = 0; i < subtitles.size(); i++) {
+            SubtitleEntry entry = subtitles.get(i);
+            List<WordTiming> words = cleanKaraokeWords(entry.getWords());
+            long firstStart = karaokeFirstStart(entry, words);
+            long lastEnd = words.isEmpty()
+                    ? parseSubtitleTime(entry.getEndTime())
+                    : words.get(words.size() - 1).getEndMs();
+            if (lastEnd <= firstStart) {
+                continue;
+            }
+            long nextFirstStart = Long.MAX_VALUE;
+            if (i + 1 < subtitles.size()) {
+                SubtitleEntry next = subtitles.get(i + 1);
+                nextFirstStart = karaokeFirstStart(next, cleanKaraokeWords(next.getWords()));
+            }
+            long displayStart = Math.max(prevDisplayEnd, Math.max(0, firstStart - 400));
+            if (displayStart > firstStart) {
+                displayStart = firstStart;
+            }
+            long displayEnd = Math.max(lastEnd, Math.min(lastEnd + 500, nextFirstStart));
+            prevDisplayEnd = displayEnd;
+
+            String text;
+            if (words.isEmpty()) {
+                text = escapeAssText(entry.getText() == null ? "" : entry.getText());
+            } else {
+                StringBuilder sb = new StringBuilder();
+                long cursorCs = 0;
+                for (int w = 0; w < words.size(); w++) {
+                    WordTiming cur = words.get(w);
+                    long startCs = Math.round((cur.getStartMs() - displayStart) / 10.0);
+                    long endCs = Math.round((cur.getEndMs() - displayStart) / 10.0);
+                    if (startCs < cursorCs) {
+                        startCs = cursorCs;
+                    }
+                    long gap = startCs - cursorCs;
+                    if (gap > 0) {
+                        sb.append("{\\k").append(gap).append("}");
+                    }
+                    long duration = Math.max(1, endCs - startCs);
+                    sb.append("{\\kf").append(duration).append("}").append(escapeAssText(cur.getWord()));
+                    if (w + 1 < words.size() && karaokeNeedsSpace(cur.getWord(), words.get(w + 1).getWord())) {
+                        sb.append(' ');
+                    }
+                    cursorCs = startCs + duration;
+                }
+                text = sb.toString();
+            }
+            if (text.trim().isEmpty()) {
+                continue;
+            }
+            writer.write(String.format(Locale.US, "Dialogue: 0,%s,%s,Karaoke,,0,0,0,,%s\n",
+                    formatAssTime(displayStart), formatAssTime(displayEnd), text));
+        }
+        writer.flush();
+    }
+
+    private List<WordTiming> cleanKaraokeWords(List<WordTiming> source) {
+        List<WordTiming> cleaned = new ArrayList<>();
+        if (source == null) {
+            return cleaned;
+        }
+        for (WordTiming word : source) {
+            if (word == null || word.getWord() == null) {
+                continue;
+            }
+            String trimmed = word.getWord().trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            cleaned.add(new WordTiming(trimmed, word.getStartMs(), word.getEndMs(), word.getConfidence()));
+        }
+        return cleaned;
+    }
+
+    private long karaokeFirstStart(SubtitleEntry entry, List<WordTiming> words) {
+        return words.isEmpty() ? parseSubtitleTime(entry.getStartTime()) : words.get(0).getStartMs();
+    }
+
+    private boolean karaokeNeedsSpace(String left, String right) {
+        if (left == null || right == null || left.isEmpty() || right.isEmpty()) {
+            return false;
+        }
+        int last = left.codePointBefore(left.length());
+        int first = right.codePointAt(0);
+        if (isCjkLike(last) || isCjkLike(first)) {
+            return false;
+        }
+        if (first < 128 && ",.!?;:%)]}'\"".indexOf((char) first) >= 0) {
+            return false;
+        }
+        return !(last < 128 && "([{".indexOf((char) last) >= 0);
+    }
+
+    private boolean isCjkLike(int codePoint) {
+        Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+        if (script == Character.UnicodeScript.HAN || script == Character.UnicodeScript.HIRAGANA
+                || script == Character.UnicodeScript.KATAKANA || script == Character.UnicodeScript.HANGUL
+                || script == Character.UnicodeScript.BOPOMOFO) {
+            return true;
+        }
+        Character.UnicodeBlock block = Character.UnicodeBlock.of(codePoint);
+        return block == Character.UnicodeBlock.CJK_SYMBOLS_AND_PUNCTUATION
+                || block == Character.UnicodeBlock.HALFWIDTH_AND_FULLWIDTH_FORMS;
+    }
+
+    /**
+     * Turns an audio file (mp3, wav, ...) into an mp4 with a plain dark background and KTV style subtitles.
+     */
+    public void exportKaraokeVideo(Uri audioUri, List<SubtitleEntry> subtitles, String fontName,
+                                   File outputDir, VideoExportCallback callback) {
+        executorService.execute(() -> {
+            File assFile = null;
+            try {
+                setupFontDirectories();
+                File exportDir = resolveOutputDir(outputDir);
+                String assFontName = resolveAssFontName(fontName);
+                assFile = new File(context.getCacheDir(), "temp_karaoke.ass");
+                try (FileOutputStream fos = new FileOutputStream(assFile)) {
+                    writeKaraokeAssSubtitles(subtitles, fos, assFontName);
+                }
+
+                String videoName = getVideoNameFromUri(audioUri);
+                String uniqueFileName = buildExportFileName("ktv-subtitles", videoName, "mp4");
+                File outputFile = new File(exportDir, uniqueFileName);
+                if (outputFile.exists()) {
+                    callback.onError("Already exported this video with this model: " + outputFile.getName());
+                    return;
+                }
+
+                String inputPath = FFmpegKitConfig.getSafParameterForRead(context, audioUri);
+                String command = String.format(Locale.US,
+                        "-y -f lavfi -i color=c=0x14141e:s=1280x720:r=25 -i %s "
+                                + "-vf \"ass='%s'\" -map 0:v -map 1:a -shortest "
+                                + "-c:v mpeg4 -q:v 3 -pix_fmt yuv420p -c:a aac -b:a 192k %s",
+                        inputPath, escapeFilterPath(assFile.getAbsolutePath()), outputFile.getAbsolutePath());
+                DebugLog.d(TAG, "Executing FFmpeg command: " + command);
+
+                callback.onProgressUpdate(-1);
+                FFmpegSession session = FFmpegKit.execute(command);
+                if (ReturnCode.isSuccess(session.getReturnCode())) {
+                    callback.onVideoExported(outputFile.getAbsolutePath());
+                } else if (wasCancelled(session)) {
+                    callback.onError("Export cancelled");
+                } else {
+                    String errorMessage = session.getOutput() + "\n" + session.getLogsAsString();
+                    DebugLog.e(TAG, "FFmpeg error: " + errorMessage);
+                    callback.onError("FFmpeg command failed: " + errorMessage);
+                }
+            } catch (IOException e) {
+                DebugLog.e(TAG, "Error exporting KTV video", e);
+                callback.onError("Error exporting video: " + e.getMessage());
+            } finally {
+                if (assFile != null && assFile.exists()) {
+                    assFile.delete();
+                }
+            }
+        });
     }
 
     public static class ShortsSubtitleStyle {
