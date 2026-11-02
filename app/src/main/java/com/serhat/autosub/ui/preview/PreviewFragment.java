@@ -871,12 +871,22 @@ public class PreviewFragment extends Fragment implements ActionMode.Callback {
                                 "Add a subtitle track that can be turned on or off in compatible players."),
                         new AppOptionDialog.Option(
                                 "Hard subtitle video",
-                                "Burn subtitles into the video image so they show everywhere.")
+                                "Burn subtitles into the video image so they show everywhere."),
+                        new AppOptionDialog.Option(
+                                "ASS subtitle file (KTV karaoke)",
+                                "Shows the whole line and fills in each word as it is sung. Needs a player that supports ASS karaoke, such as VLC."),
+                        new AppOptionDialog.Option(
+                                "LRC lyrics file (word-by-word)",
+                                "Lyrics file with a time tag for every word. Works with music players that support enhanced LRC.")
                 }, which -> {
                     if (which == 0) {
                         saveSubtitlesInFormat("srt");
                     } else if (which == 1) {
                         saveSubtitlesInFormat("vtt");
+                    } else if (which == 4) {
+                        saveSubtitlesInFormat("ass");
+                    } else if (which == 5) {
+                        saveSubtitlesInFormat("lrc");
                     } else {
                         boolean hardSubtitles = which == 3;
                         if (!hardSubtitles && shouldAskSoftSubtitleContainer()) {
