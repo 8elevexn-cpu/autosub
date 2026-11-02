@@ -389,7 +389,36 @@ public class GenerateFragment extends Fragment implements ActionMode.Callback {
         }
     }
 
+    private void exportKaraokeQueueVideo(QueueItem item) {
+        ExportFolderDialog.show(this, "Export to folder", outputDir -> {
+            Toast.makeText(requireContext(), "Creating KTV video...", Toast.LENGTH_SHORT).show();
+            viewModel.exportKaraokeVideoForQueueItem(item, outputDir, new SubtitleGenerator.VideoExportCallback() {
+                @Override
+                public void onVideoExported(String filePath) {
+                    if (!isAdded()) return;
+                    ExportFileActions.showExportCompleteDialog(GenerateFragment.this, viewModel, filePath, true);
+                }
+
+                @Override
+                public void onError(String errorMessage) {
+                    if (!isAdded()) return;
+                    Toast.makeText(requireContext(), "Error exporting: " + errorMessage, Toast.LENGTH_LONG).show();
+                }
+
+                @Override
+                public void onProgressUpdate(int progress) {
+                    // Progress is shown on the queue item card.
+                }
+            });
+        });
+    }
+
     private void quickExportVideo(QueueItem item) {
+        if (MainViewModel.looksLikeAudioFile(item.getDisplayName())) {
+            // Audio files have no picture, so make a KTV style video with a plain background.
+            exportKaraokeQueueVideo(item);
+            return;
+        }
         AppOptionDialog.show(requireContext(),
                 "Export video",
                 "Choose how subtitles should be included in the exported video.",
@@ -581,9 +610,15 @@ public class GenerateFragment extends Fragment implements ActionMode.Callback {
                                 "Most common subtitle format. Works with many editors, players, and upload sites."),
                         new AppOptionDialog.Option(
                                 "VTT",
-                                "Web-friendly subtitle format for browsers and HTML video workflows.")
+                                "Web-friendly subtitle format for browsers and HTML video workflows."),
+                        new AppOptionDialog.Option(
+                                "ASS (KTV karaoke)",
+                                "Shows the whole line and fills in each word as it is sung. Needs a player that supports ASS karaoke, such as VLC."),
+                        new AppOptionDialog.Option(
+                                "LRC (word-by-word lyrics)",
+                                "Lyrics file with a time tag for every word. Works with music players that support enhanced LRC.")
                 }, which -> {
-                    String format = (which == 0 ? "srt" : "vtt");
+                    String format = (which == 0 ? "srt" : which == 1 ? "vtt" : which == 2 ? "ass" : "lrc");
                     chooseSubtitleLayerMode(item, layerMode ->
                             ExportFolderDialog.show(this, "Save to folder", outputDir ->
                                     executeSaveSubtitles(item, format, outputDir, layerMode)));
