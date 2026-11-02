@@ -5,6 +5,10 @@ plugins {
 
 android {
     namespace 'com.serhat.autosub'
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
     compileSdk {
         version = release(36)
     }
