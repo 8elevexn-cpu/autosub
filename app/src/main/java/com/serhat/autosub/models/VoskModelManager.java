@@ -116,9 +116,16 @@ public class VoskModelManager {
         if (selected != null && isInstalled(selected.getId())) {
             return selected;
         }
+        // The remembered model is not installed (any more): use another installed one, or none at all.
         VoskModelInfo fallback = findById(DEFAULT_MODEL_ID);
-        if (fallback == null && !catalog.isEmpty()) {
-            fallback = catalog.get(0);
+        if (fallback == null || !isInstalled(fallback.getId())) {
+            fallback = null;
+            for (VoskModelInfo candidate : catalog) {
+                if (isInstalled(candidate.getId())) {
+                    fallback = candidate;
+                    break;
+                }
+            }
         }
         if (fallback != null) {
             selectModel(fallback.getId());
@@ -232,7 +239,7 @@ public class VoskModelManager {
         File target = getModelDirectory(modelInfo);
         boolean deleted = deleteRecursively(target);
         if (modelId.equals(preferences.getString(KEY_SELECTED_MODEL_ID, DEFAULT_MODEL_ID))) {
-            selectModel(DEFAULT_MODEL_ID);
+            preferences.edit().remove(KEY_SELECTED_MODEL_ID).apply();
         }
         return deleted;
     }
