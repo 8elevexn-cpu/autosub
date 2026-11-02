@@ -888,7 +888,6 @@
         "details":  "Base: balanced Whisper model with useful quality while still being realistic for mobile. English-only model optimized for English audio. Q5 quantization cuts size more aggressively with a possible accuracy tradeoff.",
         "downloadUrl":  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin",
         "mobileRecommended":  true,
-        "bundledAssetName":  "models/ggml-base.en-q5_1.bin",
         "isWhisper":  true
     },
     {
