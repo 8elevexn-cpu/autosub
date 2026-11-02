@@ -31,7 +31,7 @@ public final class ExportFileActions {
 
     public static boolean isSubtitle(File file) {
         String name = file == null ? "" : file.getName().toLowerCase(Locale.US);
-        return name.endsWith(".srt") || name.endsWith(".vtt") || name.endsWith(".ass");
+        return name.endsWith(".srt") || name.endsWith(".vtt") || name.endsWith(".ass") || name.endsWith(".lrc");
     }
 
     public static void showExportCompleteDialog(Fragment fragment, MainViewModel viewModel,
@@ -193,7 +193,7 @@ public final class ExportFileActions {
         String name = file.getName().toLowerCase(Locale.US);
         if (name.endsWith(".srt")) return "application/x-subrip";
         if (name.endsWith(".vtt")) return "text/vtt";
-        if (name.endsWith(".ass")) return "text/plain";
+        if (name.endsWith(".ass") || name.endsWith(".lrc")) return "text/plain";
         if (name.endsWith(".mkv")) return "video/x-matroska";
         String extension = MimeTypeMap.getFileExtensionFromUrl(file.getName());
         String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
