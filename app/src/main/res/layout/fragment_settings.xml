@@ -96,6 +96,13 @@
                 android:text="Keep sentences together" />
 
             <com.google.android.material.materialswitch.MaterialSwitch
+                android:id="@+id/convertTraditionalSwitch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="Convert Simplified Chinese to Traditional" />
+
+            <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/suppressWhisperSdhSwitch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -309,7 +316,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="Use word-by-word for vertical videos" />
+                android:text="Use word-by-word for vertical videos and audio files" />
 
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/skipShortsDialogSwitch"
