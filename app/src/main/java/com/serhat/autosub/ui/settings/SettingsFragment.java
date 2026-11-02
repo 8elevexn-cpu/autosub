@@ -223,7 +223,7 @@ public class SettingsFragment extends Fragment {
     // Tap an option to show or hide a short explanation under it.
     private void setupOptionHelp() {
         attachHelp(binding.subtitleWordsValueTV,
-                "每一句字幕最多放幾個字（最少 3、最多 25）。中文是以辨識出的詞為單位，不一定剛好是一個字。數字越小，一行字幕越短。");
+                "每一句字幕最多放幾個字（最少 3、最多 25）。英文一個單字算一個，中文兩個字算一個。數字越小，一行字幕越短。");
         attachHelp(binding.keepSentencesTogetherSwitch,
                 "遇到句號、驚嘆號、問號就換成下一句字幕，避免一句話被切成兩段。");
         attachHelp(binding.convertTraditionalSwitch,
