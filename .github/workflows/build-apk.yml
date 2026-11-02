@@ -9,6 +9,8 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -68,4 +70,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: autosub-apk
-          path: app/build/outputs/apk/**/*.apk
+          path: app/build/outputs/apk/**/*arm64-v8a*.apk
+
+      # 發布成 GitHub Release,Obtainium 才能用 repo 網址直接下載安裝
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: AutoSub mp3 build ${{ github.run_number }}
+          files: app/build/outputs/apk/**/*arm64-v8a*.apk
