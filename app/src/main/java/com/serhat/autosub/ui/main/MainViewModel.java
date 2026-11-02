@@ -80,6 +80,7 @@ public class MainViewModel extends AndroidViewModel {
     private static final String KEY_BATCH_FORMAT = "batch_format";
     private static final String KEY_SUBTITLE_MAX_WORDS = "subtitle_max_words_per_subtitle";
     private static final String KEY_KEEP_SENTENCES_TOGETHER = "keep_sentences_together";
+    private static final String KEY_CONVERT_TRADITIONAL = "convert_traditional";
     private static final String KEY_SUPPRESS_WHISPER_SDH = "suppress_whisper_sdh";
     private static final String KEY_WHISPER_VAD_ENABLED = "whisper_vad_enabled";
     private static final String KEY_WHISPER_VAD_MODEL = "whisper_vad_model";
@@ -131,6 +132,7 @@ public class MainViewModel extends AndroidViewModel {
     private final MutableLiveData<String> batchFormat = new MutableLiveData<>("srt");
     private final MutableLiveData<Integer> subtitleMaxWords = new MutableLiveData<>(SubtitleGenerator.DEFAULT_MAX_WORDS_PER_SUBTITLE);
     private final MutableLiveData<Boolean> keepSentencesTogether = new MutableLiveData<>(SubtitleGenerator.DEFAULT_KEEP_SENTENCES_TOGETHER);
+    private final MutableLiveData<Boolean> convertTraditional = new MutableLiveData<>(false);
     private final MutableLiveData<Boolean> suppressWhisperSdh = new MutableLiveData<>(true);
     private final MutableLiveData<Boolean> whisperVadEnabled = new MutableLiveData<>(false);
     private final MutableLiveData<String> whisperVadModel = new MutableLiveData<>(SubtitleGenerator.VAD_MODEL_WEBRTC);
@@ -430,6 +432,7 @@ public class MainViewModel extends AndroidViewModel {
     public LiveData<String> getBatchFormat() { return batchFormat; }
     public LiveData<Integer> getSubtitleMaxWords() { return subtitleMaxWords; }
     public LiveData<Boolean> getKeepSentencesTogether() { return keepSentencesTogether; }
+    public LiveData<Boolean> getConvertTraditional() { return convertTraditional; }
     public LiveData<Boolean> getSuppressWhisperSdh() { return suppressWhisperSdh; }
     public LiveData<Boolean> getWhisperVadEnabled() { return whisperVadEnabled; }
     public LiveData<String> getWhisperVadModel() { return whisperVadModel; }
@@ -471,6 +474,9 @@ public class MainViewModel extends AndroidViewModel {
                 KEY_KEEP_SENTENCES_TOGETHER, SubtitleGenerator.DEFAULT_KEEP_SENTENCES_TOGETHER);
         keepSentencesTogether.setValue(savedKeepSentencesTogether);
         subtitleGenerator.setKeepSentencesTogether(savedKeepSentencesTogether);
+        boolean savedConvertTraditional = settingsPrefs.getBoolean(KEY_CONVERT_TRADITIONAL, false);
+        convertTraditional.setValue(savedConvertTraditional);
+        subtitleGenerator.setConvertToTraditional(savedConvertTraditional);
         boolean suppressSdh = settingsPrefs.getBoolean(KEY_SUPPRESS_WHISPER_SDH, true);
         suppressWhisperSdh.setValue(suppressSdh);
         subtitleGenerator.setSuppressWhisperSdh(suppressSdh);
@@ -677,6 +683,12 @@ public class MainViewModel extends AndroidViewModel {
         subtitleMaxWords.setValue(boundedWords);
         subtitleGenerator.setMaxWordsPerSubtitle(boundedWords);
         settingsPrefs.edit().putInt(KEY_SUBTITLE_MAX_WORDS, boundedWords).apply();
+    }
+
+    public void setConvertTraditional(boolean enabled) {
+        convertTraditional.setValue(enabled);
+        subtitleGenerator.setConvertToTraditional(enabled);
+        settingsPrefs.edit().putBoolean(KEY_CONVERT_TRADITIONAL, enabled).apply();
     }
 
     public void setKeepSentencesTogether(boolean keepTogether) {
@@ -1004,7 +1016,7 @@ public class MainViewModel extends AndroidViewModel {
         VoskModelInfo info = modelManager.getSelectedModel();
         selectedModelInfo.setValue(info);
         if (info == null) {
-            generalStatusText.setValue("No speech models are available");
+            generalStatusText.setValue("No speech model installed - open Models to download one");
             return;
         }
 
@@ -1026,11 +1038,8 @@ public class MainViewModel extends AndroidViewModel {
     }
 
     private boolean shouldDeferHeavyModelLoad(VoskModelInfo modelInfo) {
-        return !allowHeavyModelLoad
-                && modelInfo != null
-                && !modelInfo.isBundled()
-                && modelManager.getModelLoadMode(modelInfo) == VoskModelManager.ModelLoadMode.FULL_QUALITY
-                && (modelInfo.isVeryLarge() || !modelInfo.isMobileRecommended());
+        // The model the person picked is always kept and loaded again on the next launch.
+        return false;
     }
 
     private void updateSelectedModelViews(VoskModelInfo info) {
@@ -1383,6 +1392,15 @@ public class MainViewModel extends AndroidViewModel {
         return "";
     }
 
+    public static boolean looksLikeAudioFile(String name) {
+        if (name == null) {
+            return false;
+        }
+        String n = name.toLowerCase(java.util.Locale.ROOT);
+        return n.endsWith(".mp3") || n.endsWith(".wav") || n.endsWith(".m4a") || n.endsWith(".aac")
+                || n.endsWith(".flac") || n.endsWith(".ogg") || n.endsWith(".opus") || n.endsWith(".wma");
+    }
+
     public void addVideosToQueue(List<Uri> uris, DisplayNameResolver nameResolver, RotationResolver rotationResolver) {
         addVideosToQueue(uris, nameResolver, rotationResolver, false);
     }
@@ -1393,11 +1411,13 @@ public class MainViewModel extends AndroidViewModel {
             List<QueueItem> newItems = new ArrayList<>();
             boolean wordByWordCaptions = settingsPrefs.getBoolean(KEY_SHORTS_MODE_WORD_BY_WORD, false);
             for (Uri uri : uris) {
-                QueueItem item = new QueueItem(uri, nameResolver.resolve(uri));
+                String displayName = nameResolver.resolve(uri);
+                QueueItem item = new QueueItem(uri, displayName);
                 // "Shorts mode" for an item means word-by-word captions, which only applies when the
-                // video is vertical AND the user picked word-by-word in the Shorts dialog. A vertical
+                // video is vertical (or an audio-only file) AND the user picked word-by-word. A vertical
                 // video with "Standard captions" is treated as a normal video.
-                item.setShortsVideo(rotationResolver.isVertical(uri) && wordByWordCaptions);
+                item.setShortsVideo((rotationResolver.isVertical(uri) || looksLikeAudioFile(displayName))
+                        && wordByWordCaptions);
                 item.setUseVad(useVad);
                 long id = queueStore.addItem(item);
                 item.setId(id);
@@ -1496,6 +1516,7 @@ public class MainViewModel extends AndroidViewModel {
                 KEY_SUBTITLE_MAX_WORDS, SubtitleGenerator.DEFAULT_MAX_WORDS_PER_SUBTITLE));
         subtitleGenerator.setKeepSentencesTogether(settingsPrefs.getBoolean(
                 KEY_KEEP_SENTENCES_TOGETHER, SubtitleGenerator.DEFAULT_KEEP_SENTENCES_TOGETHER));
+        subtitleGenerator.setConvertToTraditional(settingsPrefs.getBoolean(KEY_CONVERT_TRADITIONAL, false));
         subtitleGenerator.setSuppressWhisperSdh(settingsPrefs.getBoolean(KEY_SUPPRESS_WHISPER_SDH, true));
         subtitleGenerator.setWhisperVadEnabled(
                 settingsPrefs.getBoolean(KEY_WHISPER_VAD_ENABLED, false) || queueItem.isUseVad());
@@ -2520,6 +2541,57 @@ public class MainViewModel extends AndroidViewModel {
                             progress
                     );
                     
+                    callback.onProgressUpdate(progress);
+                });
+            }
+        });
+    }
+
+    public void exportKaraokeVideoForQueueItem(QueueItem item, File outputDir,
+                                               SubtitleGenerator.VideoExportCallback callback) {
+        Uri audioUri = item.getVideoUri();
+        List<SubtitleGenerator.SubtitleEntry> entries = item.getSubtitles();
+        if (audioUri == null || entries == null || entries.isEmpty()) {
+            callback.onError("No audio or subtitles available to export");
+            return;
+        }
+
+        item.setStatus(QueueItem.Status.EXPORTING);
+        item.setProgress(-1);
+        item.setMessage("Exporting KTV video...");
+        refreshQueue();
+
+        subtitleGenerator.exportKaraokeVideo(audioUri, entries, null, outputDir,
+                new SubtitleGenerator.VideoExportCallback() {
+            @Override
+            public void onVideoExported(String filePath) {
+                handler.post(() -> {
+                    registerExport(filePath, ExportRecord.TYPE_VIDEO, audioUri, item.getDisplayName(),
+                            "ktv-subtitles", "mp4");
+                    item.setHardVideoPath(filePath);
+                    item.setStatus(QueueItem.Status.COMPLETED);
+                    item.setProgress(100);
+                    item.setMessage("Video exported: " + filePath);
+                    refreshQueue();
+                    callback.onVideoExported(filePath);
+                });
+            }
+
+            @Override
+            public void onError(String errorMessage) {
+                handler.post(() -> {
+                    item.setStatus(QueueItem.Status.COMPLETED);
+                    item.setMessage("Failed to export: " + errorMessage);
+                    refreshQueue();
+                    callback.onError(errorMessage);
+                });
+            }
+
+            @Override
+            public void onProgressUpdate(int progress) {
+                handler.post(() -> {
+                    item.setProgress(progress);
+                    refreshQueue();
                     callback.onProgressUpdate(progress);
                 });
             }
